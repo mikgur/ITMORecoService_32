@@ -1,105 +1,118 @@
-import pandas as pd
-import numpy as np
-import scipy as sp
-from typing import Dict
+import pickle
 from collections import Counter
-import implicit
-from implicit.nearest_neighbours import ItemItemRecommender
+from pathlib import Path
+from typing import Callable
+
+import numpy as np
+import pandas as pd
 
 
-class UserKnn():
-    """Class for fit-perdict UserKNN model
-       based on ItemKNN model from implicit.nearest_neighbours
-    """
+# function to recommend to get user neighbours
+def generate_implicit_recs_mapper(model, N, users_mapping, users_inv_mapping
+                                  ) -> Callable:
+    def _recs_mapper(user):
+        user_id = users_mapping[user]
+        recs = model.similar_items(user_id, N=N)
+        return ([users_inv_mapping[user] for user, _ in recs],
+                [sim for _, sim in recs])
+    return _recs_mapper
 
-    def __init__(self, model: ItemItemRecommender, N_users: int = 50):
-        self.N_users = N_users
-        self.model = model
-        self.is_fitted = False
 
-    def get_mappings(self, train):
-        self.users_inv_mapping = dict(enumerate(train['user_id'].unique()))
-        self.users_mapping = {v: k for k, v in self.users_inv_mapping.items()}
+class OfflineUserKnnRecommender:
+    def __init__(self, model_name: str,
+                 models_dir: Path = Path('models'),
+                 popular_name: str = 'popular.pkl'):
+        with open(models_dir / model_name, 'rb') as f:
+            self.model = pickle.load(f)
+        with open(models_dir / popular_name, 'rb') as f:
+            self.popular = pickle.load(f)
 
-        self.items_inv_mapping = dict(enumerate(train['item_id'].unique()))
-        self.items_mapping = {v: k for k, v in self.items_inv_mapping.items()}
+    def recommend(self, user: str, k: int = 10):
+        return self.model.get(user, self.popular)[:k]
 
-    def get_matrix(self, df: pd.DataFrame,
-                   user_col: str = 'user_id',
-                   item_col: str = 'item_id',
-                   weight_col: str = None,
-                   users_mapping: Dict[int, int] = None,
-                   items_mapping: Dict[int, int] = None):
 
-        if weight_col:
-            weights = df[weight_col].astype(np.float32)
-        else:
-            weights = np.ones(len(df), dtype=np.float32)
+class OnlineUserKnnRecommender:
+    def __init__(self, model_name: str,
+                 models_dir: Path = Path('models'),
+                 popular_name: str = 'popular.pkl',
+                 train_name: str = 'train.csv'):
+        with open(models_dir / model_name, 'rb') as f:
+            self.model = pickle.load(f)
+        with open(models_dir / popular_name, 'rb') as f:
+            self.popular = pickle.load(f)
+        self.train = pd.read_csv(models_dir / train_name)
+        self._prepare()
 
-        interaction_matrix = sp.sparse.coo_matrix((
-            weights,
-            (
-                df[user_col].map(self.users_mapping.get),
-                df[item_col].map(self.items_mapping.get)
-            )
-            ))
+    def _prepare(self) -> None:
+        cnt: Counter = Counter(self.train['item_id'].values)
+        self.idf = pd.DataFrame.from_dict(
+            cnt,
+            orient='index',
+            columns=['doc_freq']
+            ).reset_index()
+        n = self.train.shape[0]
+        self.idf['idf'] = self.idf['doc_freq'].apply(
+            lambda x: np.log((1 + n) / (1 + x) + 1))
 
-        self.watched = df.groupby(user_col).agg({item_col: list})
-        return interaction_matrix
+        users_inv_mapping = dict(enumerate(self.train['user_id'].unique()))
+        self.users_mapping = {v: k for k, v in users_inv_mapping.items()}
 
-    def idf(self, n: int, x: float):
-        return np.log((1 + n) / (1 + x) + 1)
-
-    def _count_item_idf(self, df: pd.DataFrame):
-        item_cnt = Counter(df['item_id'].values)
-        item_idf = pd.DataFrame.from_dict(item_cnt, orient='index', columns=['doc_freq']).reset_index()
-        item_idf['idf'] = item_idf['doc_freq'].apply(lambda x: self.idf(self.n, x))
-        self.item_idf = item_idf
-
-    def fit(self, train: pd.DataFrame):
-        self.user_knn = self.model
-        self.get_mappings(train)
-        self.weights_matrix = self.get_matrix(train, users_mapping=self.users_mapping,
-                                             items_mapping=self.items_mapping)
-
-        self.n = train.shape[0]
-        self._count_item_idf(train)
-
-        self.user_knn.fit(self.weights_matrix)
-        self.is_fitted = True
-
-    def _generate_recs_mapper(self, model: ItemItemRecommender, user_mapping: Dict[int, int],
-                              user_inv_mapping: Dict[int, int], N: int):
-        def _recs_mapper(user):
-            user_id = user_mapping[user]
-            recs = model.similar_items(user_id, N=N)
-            return [user_inv_mapping[user] for user, _ in recs], [sim for _, sim in recs]
-        return _recs_mapper
-
-    def predict(self, test: pd.DataFrame, N_recs: int = 10):
-
-        if not self.is_fitted:
-            raise ValueError("Please call fit before predict")
-
-        mapper = self._generate_recs_mapper(
-            model=self.user_knn,
-            user_mapping=self.users_mapping,
-            user_inv_mapping=self.users_inv_mapping,
-            N=self.N_users
+        self.mapper = generate_implicit_recs_mapper(
+            self.model,
+            N=self.model.K,
+            users_mapping=self.users_mapping,
+            users_inv_mapping=users_inv_mapping
         )
 
-        recs = pd.DataFrame({'user_id': test['user_id'].unique()})
-        recs['sim_user_id'], recs['sim'] = zip(*recs['user_id'].map(mapper))
+        watched_items_df = self.train.groupby(
+            'user_id'
+            ).agg({'item_id': list}).reset_index()
+        self.watched_items = {}
+        for _, row in watched_items_df.iterrows():
+            # print(row)
+            self.watched_items[row['user_id']] = row['item_id']
+
+    def recommend(self, user: str, k: int = 10):
+        # t1 = time.time()
+        if user not in self.users_mapping:
+            return self.popular[:k]
+        recs = pd.DataFrame({
+            'user_id': [user]
+        })
+        recs['similar_user_id'], recs['similarity'] = zip(
+            *recs['user_id'].map(self.mapper))
         recs = recs.set_index('user_id').apply(pd.Series.explode).reset_index()
+        # delete recommendations of itself
+        recs = recs[~(recs['user_id'] == recs['similar_user_id'])]
 
-        recs = recs[~(recs['sim'] >= 1)]\
-                    .merge(self.watched, left_on=['sim_user_id'], right_on=['user_id'], how='left')\
-                    .explode('item_id')\
-                    .sort_values(['user_id', 'sim'], ascending=False)\
-                    .drop_duplicates(['user_id', 'item_id'], keep='first')\
-                    .merge(self.item_idf, left_on='item_id', right_on='index', how='left')
+        # Join watched items of neighbour users to get item recommendations
+        recs['item_id'] = recs['user_id'].apply(
+            lambda x: self.watched_items.get(x, [])
+            )
+        recs = recs.explode('item_id')
+        recs = recs.sort_values(['user_id', 'similarity'], ascending=False)
+        recs = recs.drop_duplicates(['user_id', 'item_id'], keep='first')
 
-        recs['score'] = recs['sim'] * recs['idf']
-        recs = recs.sort_values(['user_id', 'score'], ascending=False)
-        recs['rank'] = recs.groupby('user_id').cumcount() + 1
-        return recs[recs['rank'] <= N_recs][['user_id', 'item_id', 'score', 'rank']]
+        # Add IDF for items and calculate final ranks
+        recs_with_idf = recs.merge(
+            self.idf[['index', 'idf']],
+            left_on='item_id',
+            right_on='index',
+            how='left'
+        ).drop(['index'], axis=1)
+        recs_idf = recs_with_idf['idf']
+        recs_with_idf['rank_idf'] = recs_with_idf['similarity'] * recs_idf
+        recs_with_idf = recs_with_idf.sort_values(['user_id', 'rank_idf'],
+                                                  ascending=False)
+        # Calculate final ranks
+        recs_with_idf['rank'] = recs_with_idf.groupby('user_id').cumcount() + 1
+
+        # We need only 10 recs for each user
+        recs_with_idf = recs_with_idf[recs_with_idf['rank'] < 11]
+        user_recs = list(recs_with_idf['item_id'].values)
+        i = 0
+        while len(user_recs) < 10:
+            if self.popular[i] not in user_recs:
+                user_recs.append(self.popular[i])
+            i += 1
+        return user_recs[:k]
