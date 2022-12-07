@@ -19,6 +19,7 @@ def generate_implicit_recs_mapper(model, N, users_mapping, users_inv_mapping
 
 
 class OfflineUserKnnRecommender:
+    ''' Offline recommender for user-based model'''
     def __init__(self, model_name: str,
                  models_dir: Path = Path('models'),
                  popular_name: str = 'popular.pkl'):
@@ -32,6 +33,7 @@ class OfflineUserKnnRecommender:
 
 
 class OnlineUserKnnRecommender:
+    ''' Online recommender for user-based model'''
     def __init__(self, model_name: str,
                  models_dir: Path = Path('models'),
                  popular_name: str = 'popular.pkl',
@@ -44,6 +46,9 @@ class OnlineUserKnnRecommender:
         self._prepare()
 
     def _prepare(self) -> None:
+        ''' Prepare model for recommendations '''
+
+        # Pre-calculate IDF for items
         cnt: Counter = Counter(self.train['item_id'].values)
         self.idf = pd.DataFrame.from_dict(
             cnt,
@@ -54,6 +59,7 @@ class OnlineUserKnnRecommender:
         self.idf['idf'] = self.idf['doc_freq'].apply(
             lambda x: np.log((1 + n) / (1 + x) + 1))
 
+        # Create mapping for users
         users_inv_mapping = dict(enumerate(self.train['user_id'].unique()))
         self.users_mapping = {v: k for k, v in users_inv_mapping.items()}
 
@@ -64,6 +70,7 @@ class OnlineUserKnnRecommender:
             users_inv_mapping=users_inv_mapping
         )
 
+        # Prepare watched items for each user
         watched_items_df = self.train.groupby(
             'user_id'
             ).agg({'item_id': list}).reset_index()
@@ -73,9 +80,10 @@ class OnlineUserKnnRecommender:
             self.watched_items[row['user_id']] = row['item_id']
 
     def recommend(self, user: str, k: int = 10):
-        # t1 = time.time()
         if user not in self.users_mapping:
             return self.popular[:k]
+
+        # Find similar users
         recs = pd.DataFrame({
             'user_id': [user]
         })
@@ -85,7 +93,7 @@ class OnlineUserKnnRecommender:
         # delete recommendations of itself
         recs = recs[~(recs['user_id'] == recs['similar_user_id'])]
 
-        # Join watched items of neighbour users to get item recommendations
+        # Get items watched by similar users
         recs['item_id'] = recs['user_id'].apply(
             lambda x: self.watched_items.get(x, [])
             )
@@ -110,6 +118,8 @@ class OnlineUserKnnRecommender:
         # We need only 10 recs for each user
         recs_with_idf = recs_with_idf[recs_with_idf['rank'] < 11]
         user_recs = list(recs_with_idf['item_id'].values)
+
+        # Add popular items if needed
         i = 0
         while len(user_recs) < 10:
             if self.popular[i] not in user_recs:
