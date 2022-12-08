@@ -47,6 +47,10 @@ def create_app(config: ServiceConfig) -> FastAPI:
             Path(config.models_dir),
             config.popular_name,
             config.train_name),
+        'offline_mf_ann': OfflineUserKnnRecommender(
+            config.offline_mf_ann,
+            Path(config.models_dir),
+            config.popular_name),
     }
 
     add_views(app)

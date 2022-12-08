@@ -27,6 +27,7 @@ class ServiceConfig(Config):
     offline_tfidf_idf_10: str = "tfidf_idf_10_offline.pkl"
     popular_name: str = "popular.pkl"
     online_tfidf_idf_10: str = "TFIDF_10.dill"
+    offline_mf_ann: str = "offline_ann_recs.pkl"
     train_name: str = "train.csv"
 
     log_config: LogConfig
