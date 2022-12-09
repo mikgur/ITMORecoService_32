@@ -18,7 +18,7 @@ def generate_implicit_recs_mapper(model, N, users_mapping, users_inv_mapping
     return _recs_mapper
 
 
-class OfflineUserKnnRecommender:
+class OfflineRecommender:
     ''' Offline recommender for user-based model'''
     def __init__(self, model_name: str,
                  models_dir: Path = Path('models'),
@@ -76,7 +76,6 @@ class OnlineUserKnnRecommender:
             ).agg({'item_id': list}).reset_index()
         self.watched_items = {}
         for _, row in watched_items_df.iterrows():
-            # print(row)
             self.watched_items[row['user_id']] = row['item_id']
 
     def recommend(self, user: str, k: int = 10):
