@@ -18,7 +18,25 @@ def generate_implicit_recs_mapper(model, N, users_mapping, users_inv_mapping
     return _recs_mapper
 
 
-class OfflineUserKnnRecommender:
+class PopularItemsPadder:
+    ''' Add up to K popular items to the recommendations '''
+    def __init__(self, k: int = 10,
+                 models_dir: Path = Path('models'),
+                 popular_name: str = 'popular.pkl'):
+        self.k = k
+        with open(models_dir / popular_name, 'rb') as f:
+            self.popular = pickle.load(f)
+
+    def pad(self, recs: list) -> list:
+        i = 0
+        while len(recs) < 10:
+            if self.popular[i] not in recs:
+                recs.append(self.popular[i])
+            i += 1
+        return recs
+
+
+class OfflineRecommender:
     ''' Offline recommender for user-based model'''
     def __init__(self, model_name: str,
                  models_dir: Path = Path('models'),
@@ -36,12 +54,9 @@ class OnlineUserKnnRecommender:
     ''' Online recommender for user-based model'''
     def __init__(self, model_name: str,
                  models_dir: Path = Path('models'),
-                 popular_name: str = 'popular.pkl',
                  train_name: str = 'train.csv'):
         with open(models_dir / model_name, 'rb') as f:
             self.model = pickle.load(f)
-        with open(models_dir / popular_name, 'rb') as f:
-            self.popular = pickle.load(f)
         self.train = pd.read_csv(models_dir / train_name)
         self._prepare()
 
@@ -76,12 +91,11 @@ class OnlineUserKnnRecommender:
             ).agg({'item_id': list}).reset_index()
         self.watched_items = {}
         for _, row in watched_items_df.iterrows():
-            # print(row)
             self.watched_items[row['user_id']] = row['item_id']
 
     def recommend(self, user: str, k: int = 10):
         if user not in self.users_mapping:
-            return self.popular[:k]
+            return []
 
         # Find similar users
         recs = pd.DataFrame({
@@ -118,11 +132,4 @@ class OnlineUserKnnRecommender:
         # We need only 10 recs for each user
         recs_with_idf = recs_with_idf[recs_with_idf['rank'] < 11]
         user_recs = list(recs_with_idf['item_id'].values)
-
-        # Add popular items if needed
-        i = 0
-        while len(user_recs) < 10:
-            if self.popular[i] not in user_recs:
-                user_recs.append(self.popular[i])
-            i += 1
         return user_recs[:k]
