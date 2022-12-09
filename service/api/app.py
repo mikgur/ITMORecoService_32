@@ -1,14 +1,18 @@
 import asyncio
 from concurrent.futures.thread import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import uvloop
 from fastapi import FastAPI
 
 from ..log import app_logger, setup_logging
 from ..settings import ServiceConfig
-from ..userknn import OfflineRecommender, OnlineUserKnnRecommender
+from ..userknn import (
+    OfflineRecommender,
+    OnlineUserKnnRecommender,
+    PopularItemsPadder,
+)
 from .exception_handlers import add_exception_handlers
 from .middlewares import add_middlewares
 from .views import add_views
@@ -40,18 +44,23 @@ def create_app(config: ServiceConfig) -> FastAPI:
     app.state.models = {
         'offline_tfidf_idf_10': OfflineRecommender(
             config.offline_tfidf_idf_10,
-            Path(config.models_dir),
-            config.popular_name),
+            Path(config.models_dir)),
         'online_tfidf_idf_10': OnlineUserKnnRecommender(
             config.online_tfidf_idf_10,
             Path(config.models_dir),
-            config.popular_name,
             config.train_name),
         'offline_mf_ann': OfflineRecommender(
             config.offline_mf_ann,
-            Path(config.models_dir),
-            config.popular_name),
+            Path(config.models_dir)),
     }
+    postprocessing: Optional[PopularItemsPadder] = None
+    if config.postprocessing == 'PopularPadding':
+        postprocessing = PopularItemsPadder(
+            k=config.k_recs,
+            popular_name=config.popular_name,
+            models_dir=Path(config.models_dir)
+            )
+    app.state.postprocessing = postprocessing
 
     add_views(app)
     add_middlewares(app)
