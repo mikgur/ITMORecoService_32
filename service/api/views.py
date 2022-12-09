@@ -80,9 +80,13 @@ async def get_reco(
 
     if model_name == 'dummy_model':
         k_recs = request.app.state.k_recs
+        reco = list(range(k_recs))
+    elif model_name in request.app.state.models:
+        model = request.app.state.models[model_name]
+        k_recs = request.app.state.k_recs
+        reco = model.recommend(user_id, k_recs)
     else:
         raise ModelNotFoundError(error_message=f"Model {model_name} not found")
-    reco = list(range(k_recs))
     return RecoResponse(user_id=user_id, items=reco)
 
 

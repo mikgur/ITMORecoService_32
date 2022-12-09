@@ -1,5 +1,6 @@
 import asyncio
 from concurrent.futures.thread import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any, Dict
 
 import uvloop
@@ -7,6 +8,7 @@ from fastapi import FastAPI
 
 from ..log import app_logger, setup_logging
 from ..settings import ServiceConfig
+from ..userknn import OfflineUserKnnRecommender, OnlineUserKnnRecommender
 from .exception_handlers import add_exception_handlers
 from .middlewares import add_middlewares
 from .views import add_views
@@ -35,6 +37,17 @@ def create_app(config: ServiceConfig) -> FastAPI:
 
     app = FastAPI(debug=False)
     app.state.k_recs = config.k_recs
+    app.state.models = {
+        'offline_tfidf_idf_10': OfflineUserKnnRecommender(
+            config.offline_tfidf_idf_10,
+            Path(config.models_dir),
+            config.popular_name),
+        'online_tfidf_idf_10': OnlineUserKnnRecommender(
+            config.online_tfidf_idf_10,
+            Path(config.models_dir),
+            config.popular_name,
+            config.train_name),
+    }
 
     add_views(app)
     add_middlewares(app)
