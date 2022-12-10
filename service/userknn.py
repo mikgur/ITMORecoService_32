@@ -108,7 +108,7 @@ class OnlineUserKnnRecommender:
         recs = recs[~(recs['user_id'] == recs['similar_user_id'])]
 
         # Get items watched by similar users
-        recs['item_id'] = recs['user_id'].apply(
+        recs['item_id'] = recs['similar_user_id'].apply(
             lambda x: self.watched_items.get(x, [])
             )
         recs = recs.explode('item_id')
