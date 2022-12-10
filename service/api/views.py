@@ -85,6 +85,8 @@ async def get_reco(
         model = request.app.state.models[model_name]
         k_recs = request.app.state.k_recs
         reco = model.recommend(user_id, k_recs)
+        if request.app.state.postprocessing:
+            reco = request.app.state.postprocessing.pad(reco)
     else:
         raise ModelNotFoundError(error_message=f"Model {model_name} not found")
     return RecoResponse(user_id=user_id, items=reco)
